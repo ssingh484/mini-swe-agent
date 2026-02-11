@@ -4,6 +4,7 @@
 
 # The minimal AI software engineering agent
 
+📣 [NEW: A2A (Agent-to-Agent) mode for distributed deployments!](A2A_MODE.md)<br/>
 📣 [New tutorial on building minimal AI agents](https://minimal-agent.com/)<br/>
 📣 [Gemini 3 Pro reaches 74% on SWE-bench verified with mini-swe-agent!](https://x.com/KLieret/status/1991164693839270372)<br/>
 📣 [New blogpost: Randomly switching between GPT-5 and Sonnet 4 boosts performance](https://www.swebench.com/SWE-bench/blog/2025/08/19/mini-roulette/)
@@ -184,6 +185,8 @@ Read more in our [documentation](https://mini-swe-agent.com/latest/):
 
 * [Quick start guide](https://mini-swe-agent.com/latest/quickstart/)
 * [Using the `mini` CLI](https://mini-swe-agent.com/latest/usage/mini/)
+* **[A2A Mode for distributed deployments](A2A_MODE.md)** 🆕
+* [LiteLLM Proxy setup](LITELLM_PROXY_MIGRATION.md)
 * [Global configuration](https://mini-swe-agent.com/latest/advanced/global_configuration/)
 * [Yaml configuration files](https://mini-swe-agent.com/latest/advanced/yaml_configuration/)
 * [Power up with the cookbook](https://mini-swe-agent.com/latest/advanced/cookbook/)
