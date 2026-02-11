@@ -2,8 +2,6 @@ import logging
 import time
 from collections.abc import Callable
 
-import litellm
-
 from minisweagent.models import GLOBAL_MODEL_STATS
 from minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
 from minisweagent.models.utils.actions_toolcall_response import (
@@ -36,16 +34,36 @@ class LitellmResponseModel(LitellmModel):
         return result
 
     def _query(self, messages: list[dict[str, str]], **kwargs):
+        # Note: The responses API is a custom litellm feature that may not be supported
+        # by all litellm proxy deployments. If you need this, ensure your proxy
+        # has the /v1/responses endpoint enabled.
         try:
-            return litellm.responses(
-                model=self.config.model_name,
-                input=messages,
-                tools=[BASH_TOOL_RESPONSE_API],
-                **(self.config.model_kwargs | kwargs),
-            )
-        except litellm.exceptions.AuthenticationError as e:
-            e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
-            raise e
+            import httpx
+            
+            # Make a direct HTTP request to the responses endpoint
+            with httpx.Client() as client:
+                response = client.post(
+                    f"{self.config.proxy_base_url}/v1/responses",
+                    headers={
+                        "Authorization": f"Bearer {self.config.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.config.model_name,
+                        "input": messages,
+                        "tools": [BASH_TOOL_RESPONSE_API],
+                        **(self.config.model_kwargs | kwargs),
+                    },
+                    timeout=300.0,
+                )
+                response.raise_for_status()
+                # Parse response similar to litellm format
+                from types import SimpleNamespace
+                return SimpleNamespace(**response.json())
+        except Exception as e:
+            error_msg = str(e) + " You can permanently set your API key with `mini-extra config set KEY VALUE`."
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
     def query(self, messages: list[dict[str, str]], **kwargs) -> dict:
         for attempt in retry(logger=logger, abort_exceptions=self.abort_exceptions):

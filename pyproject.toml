@@ -35,7 +35,8 @@ dependencies = [
     "requests",
     "jinja2",
     "pydantic >= 2.0",  # v2 required for safe mutable default arguments
-    "litellm >= 1.75.5",  # want to have gpt-5 support
+    "openai != 1.100.0,!=1.100.1",  # https://github.com/SWE-agent/mini-swe-agent/issues/446
+    "httpx",  # for custom API calls
     "tenacity",
     "rich",
     "python-dotenv",
@@ -44,7 +45,6 @@ dependencies = [
     "textual",
     "prompt_toolkit",
     "datasets",
-    "openai != 1.100.0,!=1.100.1",  # https://github.com/SWE-agent/mini-swe-agent/issues/446
 ]
 
 [project.optional-dependencies]
@@ -52,6 +52,11 @@ full = [
     "mini-swe-agent[dev]",
     "swe-rex>=1.4.0",
     "mini-swe-agent[modal]",
+    "mini-swe-agent[cost-tracking]",
+]
+
+cost-tracking = [
+    "litellm >= 1.75.5",  # optional, for cost tracking
 ]
 
 modal = [

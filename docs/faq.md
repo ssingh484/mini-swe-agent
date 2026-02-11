@@ -61,20 +61,23 @@
 
 !!! question "What models do you support?"
 
-    Currently, mini-SWE-agent supports all models that are supported by [litellm](https://github.com/BerriAI/litellm)
-    or [OpenRouter](https://openrouter.ai/)
-    and we're open to extend the `models/` directory with more models should `litellm` not support them.
+    Currently, mini-SWE-agent supports all models via a [litellm proxy](https://docs.litellm.ai/docs/proxy/quick_start)
+    or directly through [OpenRouter](https://openrouter.ai/). The proxy approach is recommended for production deployments
+    as it provides better control, monitoring, and caching capabilities.
+    
+    See the [LiteLLM Proxy Migration Guide](../LITELLM_PROXY_MIGRATION.md) for setup instructions.
 
 !!! question "How do I set the API key for a model?"
 
-    The API key can be stored either as an environment variable (note that enviroinment variables are not persistent
-    unless you set them in your `~/.bashrc` or similar), or as a permanent key in the config file.
-
-    To temporarily set the API key as an environment variable, you can use the following command:
+    When using a LiteLLM proxy, you set the proxy URL and API key:
 
     ```bash
-    export OPENAI_API_KEY=sk-test123
+    export LITELLM_PROXY_BASE_URL=http://localhost:4000
+    export LITELLM_PROXY_API_KEY=your-proxy-key
     ```
+
+    The API key can be stored either as an environment variable (note that environment variables are not persistent
+    unless you set them in your `~/.bashrc` or similar), or as a permanent key in the config file.
 
     To permanently set the API key in the config file, you can use the following command:
 

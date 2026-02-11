@@ -1,4 +1,4 @@
-import litellm
+from openai import AuthenticationError
 
 from minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
 from minisweagent.models.utils.actions_text import format_observation_messages, parse_regex_actions
@@ -19,11 +19,11 @@ class LitellmTextbasedModel(LitellmModel):
 
     def _query(self, messages: list[dict[str, str]], **kwargs):
         try:
-            return litellm.completion(
+            return self.client.chat.completions.create(
                 model=self.config.model_name, messages=messages, **(self.config.model_kwargs | kwargs)
             )
-        except litellm.exceptions.AuthenticationError as e:
-            e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
+        except AuthenticationError as e:
+            e.message = str(e) + " You can permanently set your API key with `mini-extra config set KEY VALUE`."
             raise e
 
     def _parse_actions(self, response: dict) -> list[dict]:

@@ -5,10 +5,16 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
-import litellm
 from pydantic import BaseModel
 
 from minisweagent.models import GLOBAL_MODEL_STATS
+
+# Optional litellm import for cost tracking
+try:
+    import litellm
+    LITELLM_AVAILABLE = True
+except ImportError:
+    LITELLM_AVAILABLE = False
 from minisweagent.models.utils.actions_toolcall_response import (
     BASH_TOOL_RESPONSE_API,
     format_toolcall_observation_messages,
@@ -51,7 +57,7 @@ class PortkeyResponseAPIModel:
 
     def __init__(self, **kwargs):
         self.config = PortkeyResponseAPIModelConfig(**kwargs)
-        if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
+        if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file() and LITELLM_AVAILABLE:
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
 
         self._api_key = os.getenv("PORTKEY_API_KEY")
@@ -111,6 +117,17 @@ class PortkeyResponseAPIModel:
         return parse_toolcall_actions_response(output, format_error_template=self.config.format_error_template)
 
     def _calculate_cost(self, response) -> dict[str, float]:
+        if not LITELLM_AVAILABLE:
+            if self.config.cost_tracking != "ignore_errors":
+                msg = (
+                    "litellm is not installed, cost tracking is unavailable. "
+                    "Install with: pip install litellm. You can ignore this issue from your config file with "
+                    "cost_tracking: 'ignore_errors' or globally with export MSWEA_COST_TRACKING='ignore_errors'."
+                )
+                logger.critical(msg)
+                raise RuntimeError(msg)
+            return {"cost": 0.0}
+        
         try:
             cost = litellm.cost_calculator.completion_cost(
                 response, model=self.config.litellm_model_name_override or self.config.model_name

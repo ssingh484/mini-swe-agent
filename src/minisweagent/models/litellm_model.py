@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
-import litellm
+from openai import AuthenticationError, NotFoundError, OpenAI, PermissionDeniedError
 from pydantic import BaseModel
 
 from minisweagent.models import GLOBAL_MODEL_STATS
@@ -22,10 +22,21 @@ from minisweagent.models.utils.retry import retry
 
 logger = logging.getLogger("litellm_model")
 
+# Optional litellm import for cost tracking
+try:
+    import litellm
+    LITELLM_AVAILABLE = True
+except ImportError:
+    LITELLM_AVAILABLE = False
+
 
 class LitellmModelConfig(BaseModel):
     model_name: str
     """Model name. Highly recommended to include the provider in the model name, e.g., `anthropic/claude-sonnet-4-5-20250929`."""
+    proxy_base_url: str = os.getenv("LITELLM_PROXY_BASE_URL", "http://localhost:4000")
+    """Base URL for the litellm proxy server. Defaults to http://localhost:4000"""
+    api_key: str = os.getenv("LITELLM_PROXY_API_KEY", "sk-1234")
+    """API key for the litellm proxy. Can be any value if proxy has auth disabled."""
     model_kwargs: dict[str, Any] = {}
     """Additional arguments passed to the API."""
     litellm_model_registry: Path | str | None = os.getenv("LITELLM_MODEL_REGISTRY_PATH")
@@ -47,29 +58,34 @@ class LitellmModelConfig(BaseModel):
 
 class LitellmModel:
     abort_exceptions: list[type[Exception]] = [
-        litellm.exceptions.UnsupportedParamsError,
-        litellm.exceptions.NotFoundError,
-        litellm.exceptions.PermissionDeniedError,
-        litellm.exceptions.ContextWindowExceededError,
-        litellm.exceptions.AuthenticationError,
+        NotFoundError,
+        PermissionDeniedError,
+        AuthenticationError,
+        KeyError,
         KeyboardInterrupt,
     ]
 
     def __init__(self, *, config_class: Callable = LitellmModelConfig, **kwargs):
         self.config = config_class(**kwargs)
-        if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
+        if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file() and LITELLM_AVAILABLE:
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
+        
+        # Initialize OpenAI client pointing to litellm proxy
+        self.client = OpenAI(
+            base_url=self.config.proxy_base_url,
+            api_key=self.config.api_key,
+        )
 
     def _query(self, messages: list[dict[str, str]], **kwargs):
         try:
-            return litellm.completion(
+            return self.client.chat.completions.create(
                 model=self.config.model_name,
                 messages=messages,
                 tools=[BASH_TOOL],
                 **(self.config.model_kwargs | kwargs),
             )
-        except litellm.exceptions.AuthenticationError as e:
-            e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
+        except AuthenticationError as e:
+            e.message = str(e) + " You can permanently set your API key with `mini-extra config set KEY VALUE`."
             raise e
 
     def _prepare_messages_for_api(self, messages: list[dict]) -> list[dict]:
@@ -93,6 +109,17 @@ class LitellmModel:
         return message
 
     def _calculate_cost(self, response) -> dict[str, float]:
+        if not LITELLM_AVAILABLE:
+            if self.config.cost_tracking != "ignore_errors":
+                msg = (
+                    "litellm is not installed, cost tracking is unavailable. "
+                    "Install with: pip install litellm. You can ignore this issue from your config file with "
+                    "cost_tracking: 'ignore_errors' or globally with export MSWEA_COST_TRACKING='ignore_errors'."
+                )
+                logger.critical(msg)
+                raise RuntimeError(msg)
+            return {"cost": 0.0}
+        
         try:
             cost = litellm.cost_calculator.completion_cost(response, model=self.config.model_name)
             if cost <= 0.0:

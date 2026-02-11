@@ -12,7 +12,7 @@ class TestLitellmModelConfig:
         assert LitellmModelConfig(model_name="test").format_error_template == "{{ error }}"
 
 
-def _mock_litellm_response(tool_calls):
+def _mock_openai_response(tool_calls):
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
     mock_response.choices[0].message.tool_calls = tool_calls
@@ -22,41 +22,52 @@ def _mock_litellm_response(tool_calls):
 
 
 class TestLitellmModel:
-    @patch("minisweagent.models.litellm_model.litellm.completion")
-    @patch("minisweagent.models.litellm_model.litellm.cost_calculator.completion_cost")
-    def test_query_includes_bash_tool(self, mock_cost, mock_completion):
+    @patch("minisweagent.models.litellm_model.OpenAI")
+    @patch("minisweagent.models.litellm_model.LITELLM_AVAILABLE", True)
+    @patch("minisweagent.models.litellm_model.litellm")
+    def test_query_includes_bash_tool(self, mock_litellm, mock_openai_class):
         tool_call = MagicMock()
         tool_call.function.name = "bash"
         tool_call.function.arguments = '{"command": "echo test"}'
         tool_call.id = "call_1"
-        mock_completion.return_value = _mock_litellm_response([tool_call])
-        mock_cost.return_value = 0.001
+        
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = _mock_openai_response([tool_call])
+        mock_openai_class.return_value = mock_client
+        mock_litellm.cost_calculator.completion_cost.return_value = 0.001
 
         model = LitellmModel(model_name="gpt-4")
         model.query([{"role": "user", "content": "test"}])
 
-        mock_completion.assert_called_once()
-        assert mock_completion.call_args.kwargs["tools"] == [BASH_TOOL]
+        mock_client.chat.completions.create.assert_called_once()
+        assert mock_client.chat.completions.create.call_args.kwargs["tools"] == [BASH_TOOL]
 
-    @patch("minisweagent.models.litellm_model.litellm.completion")
-    @patch("minisweagent.models.litellm_model.litellm.cost_calculator.completion_cost")
-    def test_parse_actions_valid_tool_call(self, mock_cost, mock_completion):
+    @patch("minisweagent.models.litellm_model.OpenAI")
+    @patch("minisweagent.models.litellm_model.LITELLM_AVAILABLE", True)
+    @patch("minisweagent.models.litellm_model.litellm")
+    def test_parse_actions_valid_tool_call(self, mock_litellm, mock_openai_class):
         tool_call = MagicMock()
         tool_call.function.name = "bash"
         tool_call.function.arguments = '{"command": "ls -la"}'
         tool_call.id = "call_abc"
-        mock_completion.return_value = _mock_litellm_response([tool_call])
-        mock_cost.return_value = 0.001
+        
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = _mock_openai_response([tool_call])
+        mock_openai_class.return_value = mock_client
+        mock_litellm.cost_calculator.completion_cost.return_value = 0.001
 
         model = LitellmModel(model_name="gpt-4")
         result = model.query([{"role": "user", "content": "list files"}])
         assert result["extra"]["actions"] == [{"command": "ls -la", "tool_call_id": "call_abc"}]
 
-    @patch("minisweagent.models.litellm_model.litellm.completion")
-    @patch("minisweagent.models.litellm_model.litellm.cost_calculator.completion_cost")
-    def test_parse_actions_no_tool_calls_raises(self, mock_cost, mock_completion):
-        mock_completion.return_value = _mock_litellm_response(None)
-        mock_cost.return_value = 0.001
+    @patch("minisweagent.models.litellm_model.OpenAI")
+    @patch("minisweagent.models.litellm_model.LITELLM_AVAILABLE", True)
+    @patch("minisweagent.models.litellm_model.litellm")
+    def test_parse_actions_no_tool_calls_raises(self, mock_litellm, mock_openai_class):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = _mock_openai_response(None)
+        mock_openai_class.return_value = mock_client
+        mock_litellm.cost_calculator.completion_cost.return_value = 0.001
 
         model = LitellmModel(model_name="gpt-4")
         with pytest.raises(FormatError):
