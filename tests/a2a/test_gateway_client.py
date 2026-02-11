@@ -1,206 +1,96 @@
-"""Tests for A2A gateway client."""
+"""Tests for A2A protocol types."""
 
-from unittest.mock import MagicMock, patch
-
-import httpx
 import pytest
 
-from minisweagent.a2a.gateway_client import A2AGatewayClient, A2AGatewayConfig
+from minisweagent.a2a.types import (
+    INTERNAL_ERROR,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    TASK_NOT_FOUND,
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+    Artifact,
+    JSONRPCError,
+    JSONRPCRequest,
+    JSONRPCResponse,
+    Message,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 
 
-def test_gateway_config_defaults():
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000")
-    assert config.gateway_url == "http://localhost:8000"
-    assert config.agent_name == "mini-swe-agent"
-    assert config.poll_interval == 5.0
-    assert config.timeout == 30.0
-
-
-def test_gateway_config_custom():
-    config = A2AGatewayConfig(
-        gateway_url="http://example.com:9000",
-        agent_id="custom-001",
-        agent_name="Test Agent",
-        api_key="secret-key",
-        poll_interval=10.0,
+@pytest.mark.parametrize(
+    ("state",),
+    [
+        (TaskState.submitted,),
+        (TaskState.working,),
+        (TaskState.completed,),
+        (TaskState.failed,),
+        (TaskState.canceled,),
+    ],
+)
+def test_task_lifecycle_states(state):
+    task = Task(
+        id="t1",
+        status=TaskStatus(state=state),
     )
-    assert config.gateway_url == "http://example.com:9000"
-    assert config.agent_id == "custom-001"
-    assert config.agent_name == "Test Agent"
-    assert config.api_key == "secret-key"
-    assert config.poll_interval == 10.0
+    assert task.status.state == state
+    assert task.id == "t1"
 
 
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_register_success(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"agent_id": "agent-123", "status": "registered"}
-    mock_client.post.return_value = mock_response
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000")
-    client = A2AGatewayClient(config)
-    
-    result = client.register()
-    
-    assert result["agent_id"] == "agent-123"
-    assert result["status"] == "registered"
-    assert client.config.agent_id == "agent-123"
-    assert client.registered is True
+def test_task_defaults():
+    task = Task(status=TaskStatus(state=TaskState.submitted))
+    assert task.id  # auto-generated uuid
+    assert task.artifacts == []
+    assert task.history == []
 
 
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_register_with_custom_agent_id(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"agent_id": "custom-001", "status": "registered"}
-    mock_client.post.return_value = mock_response
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000", agent_id="custom-001")
-    client = A2AGatewayClient(config)
-    
-    result = client.register()
-    
-    assert client.config.agent_id == "custom-001"
+def test_agent_card_serialization():
+    card = AgentCard(
+        name="test",
+        description="desc",
+        url="http://localhost:5000",
+        version="1.0.0",
+        capabilities=AgentCapabilities(streaming=False),
+        skills=[AgentSkill(id="s1", name="Skill", description="A skill")],
+    )
+    data = card.model_dump()
+    assert data["name"] == "test"
+    assert data["capabilities"]["streaming"] is False
+    assert len(data["skills"]) == 1
+    assert data["skills"][0]["id"] == "s1"
 
 
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_register_failure(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    mock_client.post.side_effect = httpx.HTTPError("Connection failed")
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000")
-    client = A2AGatewayClient(config)
-    
-    with pytest.raises(RuntimeError, match="A2A gateway registration failed"):
-        client.register()
+def test_jsonrpc_request_response_roundtrip():
+    req = JSONRPCRequest(id=1, method="tasks/send", params={"id": "t1"})
+    assert req.jsonrpc == "2.0"
+    assert req.method == "tasks/send"
+
+    resp = JSONRPCResponse(id=1, result={"id": "t1"})
+    assert resp.error is None
+
+    err_resp = JSONRPCResponse(
+        id=1, error=JSONRPCError(code=TASK_NOT_FOUND, message="not found")
+    )
+    assert err_resp.result is None
+    assert err_resp.error.code == TASK_NOT_FOUND
 
 
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_poll_for_task_success(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "task_id": "task-001",
-        "description": "Test task",
-        "context": {}
-    }
-    mock_client.get.return_value = mock_response
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000", agent_id="agent-123")
-    client = A2AGatewayClient(config)
-    
-    task = client.poll_for_task()
-    
-    assert task is not None
-    assert task["task_id"] == "task-001"
-    assert task["description"] == "Test task"
+def test_message_with_text_parts():
+    msg = Message(role="user", parts=[TextPart(text="hello")])
+    assert msg.parts[0].text == "hello"
+    assert msg.parts[0].type == "text"
 
 
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_poll_for_task_no_tasks(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    
-    mock_response = MagicMock()
-    mock_response.status_code = 204
-    mock_client.get.return_value = mock_response
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000", agent_id="agent-123")
-    client = A2AGatewayClient(config)
-    
-    task = client.poll_for_task()
-    
-    assert task is None
+def test_artifact():
+    artifact = Artifact(name="result", parts=[TextPart(text="output")])
+    assert artifact.index == 0
+    assert artifact.parts[0].text == "output"
 
 
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_poll_for_task_without_agent_id(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000")
-    client = A2AGatewayClient(config)
-    
-    with pytest.raises(ValueError, match="Cannot poll: agent not registered"):
-        client.poll_for_task()
-
-
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_submit_result_success(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"status": "accepted"}
-    mock_client.post.return_value = mock_response
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000", agent_id="agent-123")
-    client = A2AGatewayClient(config)
-    
-    result = {"exit_status": "completed", "submission": "done"}
-    response = client.submit_result("task-001", result)
-    
-    assert response["status"] == "accepted"
-
-
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_send_heartbeat(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"status": "ok"}
-    mock_client.post.return_value = mock_response
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000", agent_id="agent-123")
-    client = A2AGatewayClient(config)
-    
-    response = client.send_heartbeat("available")
-    
-    assert response["status"] == "ok"
-
-
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_unregister(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"status": "unregistered"}
-    mock_client.delete.return_value = mock_response
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000", agent_id="agent-123")
-    client = A2AGatewayClient(config)
-    client.registered = True
-    
-    response = client.unregister()
-    
-    assert response["status"] == "unregistered"
-    assert client.registered is False
-
-
-@patch("minisweagent.a2a.gateway_client.httpx.Client")
-def test_context_manager(mock_client_class):
-    mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
-    
-    config = A2AGatewayConfig(gateway_url="http://localhost:8000")
-    
-    with A2AGatewayClient(config) as client:
-        assert client is not None
-    
-    mock_client.close.assert_called_once()
+def test_error_codes_are_distinct():
+    codes = [INTERNAL_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, TASK_NOT_FOUND]
+    assert len(set(codes)) == len(codes)

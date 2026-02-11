@@ -1,202 +1,217 @@
-"""A2A Agent wrapper for gateway-based operation."""
+"""A2A protocol server.
 
+Implements the Google A2A protocol: Agent Card discovery + JSON-RPC task handling.
+"""
+
+from __future__ import annotations
+
+import asyncio
 import logging
-import signal
-import sys
-import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
 from minisweagent import Environment, Model
-from minisweagent.a2a.gateway_client import A2AGatewayClient, A2AGatewayConfig
+from minisweagent.a2a.types import (
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    TASK_NOT_CANCELABLE,
+    TASK_NOT_FOUND,
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+    Artifact,
+    JSONRPCError,
+    JSONRPCRequest,
+    JSONRPCResponse,
+    Message,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from minisweagent.agents.default import AgentConfig, DefaultAgent
 
+logger = logging.getLogger("a2a_server")
 
-class A2AAgent:
-    """Agent wrapper that operates in A2A mode with gateway registration.
-    
-    This wrapper:
-    - Registers with an A2A gateway
-    - Polls for tasks from the gateway
-    - Executes tasks using the underlying agent
-    - Reports results back to the gateway
-    - Handles heartbeats and graceful shutdown
-    """
+
+class A2AServer:
+    """A2A protocol server wrapping a DefaultAgent."""
 
     def __init__(
         self,
         model: Model,
         env: Environment,
-        gateway_config: A2AGatewayConfig,
+        *,
         agent_config_class: type = AgentConfig,
-        **agent_kwargs,
+        agent_name: str = "mini-swe-agent",
+        agent_description: str = "AI software engineering agent",
+        host: str = "0.0.0.0",
+        port: int = 5000,
+        **agent_kwargs: Any,
     ):
-        """Initialize A2A agent.
-        
-        Args:
-            model: Language model to use
-            env: Environment for task execution
-            gateway_config: Configuration for A2A gateway connection
-            agent_config_class: Agent configuration class
-            **agent_kwargs: Additional arguments for agent configuration
-        """
         self.model = model
         self.env = env
-        self.gateway_config = gateway_config
         self.agent_config_class = agent_config_class
         self.agent_kwargs = agent_kwargs
-        self.logger = logging.getLogger("a2a_agent")
-        self.gateway_client = A2AGatewayClient(gateway_config)
-        self.running = False
-        self.current_task_id: str | None = None
-        
-        # Setup signal handlers for graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        self.host = host
+        self.port = port
+        self.tasks: dict[str, Task] = {}
+        self._executor = ThreadPoolExecutor(max_workers=4)
 
-    def _signal_handler(self, signum, frame):
-        """Handle shutdown signals gracefully."""
-        self.logger.info(f"Received signal {signum}, shutting down...")
-        self.running = False
+        self.agent_card = AgentCard(
+            name=agent_name,
+            description=agent_description,
+            url=f"http://{host}:{port}",
+            version="1.0.0",
+            capabilities=AgentCapabilities(streaming=False, pushNotifications=False),
+            skills=[
+                AgentSkill(
+                    id="software-engineering",
+                    name="Software Engineering",
+                    description="Solve software engineering tasks: bug fixes, features, refactoring",
+                    tags=["code", "bash", "debugging"],
+                ),
+            ],
+        )
 
-    def register(self) -> dict[str, Any]:
-        """Register with the A2A gateway."""
-        return self.gateway_client.register()
+        self.app = Starlette(
+            routes=[
+                Route("/.well-known/agent.json", self._agent_card, methods=["GET"]),
+                Route("/", self._jsonrpc, methods=["POST"]),
+            ],
+        )
 
-    def unregister(self):
-        """Unregister from the gateway."""
+    async def _agent_card(self, request: Request) -> JSONResponse:
+        return JSONResponse(self.agent_card.model_dump())
+
+    async def _jsonrpc(self, request: Request) -> JSONResponse:
         try:
-            self.gateway_client.unregister()
-        except Exception as e:
-            self.logger.error(f"Error during unregistration: {e}")
+            body = await request.json()
+        except Exception:
+            return self._error_response(None, INVALID_REQUEST, "Invalid JSON")
 
-    def run(self) -> None:
-        """Main loop: register, poll for tasks, execute, report results.
-        
-        This method runs indefinitely until interrupted.
-        """
         try:
-            # Register with gateway
-            self.logger.info(f"Registering with A2A gateway at {self.gateway_config.gateway_url}")
-            registration_info = self.register()
-            self.logger.info(f"Registration successful: {registration_info}")
-            
-            self.running = True
-            last_heartbeat = time.time()
-            heartbeat_interval = 30.0  # Send heartbeat every 30 seconds
-            
-            while self.running:
-                try:
-                    # Send heartbeat if needed
-                    if time.time() - last_heartbeat > heartbeat_interval:
-                        status = "busy" if self.current_task_id else "available"
-                        self.gateway_client.send_heartbeat(status=status)
-                        last_heartbeat = time.time()
-                    
-                    # Poll for new task
-                    task = self.gateway_client.poll_for_task()
-                    
-                    if task:
-                        self.logger.info(f"Received task: {task.get('task_id', 'unknown')}")
-                        self._execute_task(task)
-                    else:
-                        # No task available, wait before polling again
-                        time.sleep(self.gateway_config.poll_interval)
-                        
-                except KeyboardInterrupt:
-                    self.logger.info("Keyboard interrupt received")
-                    self.running = False
-                    break
-                except Exception as e:
-                    self.logger.error(f"Error in main loop: {e}", exc_info=True)
-                    time.sleep(self.gateway_config.poll_interval)
-                    
-        finally:
-            self.logger.info("Shutting down A2A agent")
-            self.unregister()
-            self.gateway_client.close()
+            rpc = JSONRPCRequest(**body)
+        except Exception:
+            return self._error_response(body.get("id"), INVALID_REQUEST, "Invalid JSON-RPC request")
 
-    def _execute_task(self, task: dict[str, Any]) -> None:
-        """Execute a task received from the gateway.
-        
-        Args:
-            task: Task data from gateway containing task_id and task description
-        """
-        task_id = task.get("task_id")
-        if not task_id:
-            self.logger.error("Task missing task_id, skipping")
-            return
-        
-        self.current_task_id = task_id
-        
+        handlers = {
+            "tasks/send": self._handle_tasks_send,
+            "tasks/get": self._handle_tasks_get,
+            "tasks/cancel": self._handle_tasks_cancel,
+        }
+        handler = handlers.get(rpc.method)
+        if not handler:
+            return self._error_response(rpc.id, METHOD_NOT_FOUND, f"Unknown method: {rpc.method}")
+
+        return await handler(rpc)
+
+    async def _handle_tasks_send(self, rpc: JSONRPCRequest) -> JSONResponse:
+        params = rpc.params or {}
+        task_id = params.get("id", str(uuid.uuid4()))
+        session_id = params.get("sessionId")
+        message_data = params.get("message")
+
+        if not message_data:
+            return self._error_response(rpc.id, INVALID_PARAMS, "Missing 'message' in params")
+
+        # Extract text from message parts
+        task_text = ""
+        for part in message_data.get("parts", []):
+            if part.get("type", "text") == "text":
+                task_text += part.get("text", "")
+
+        if not task_text:
+            return self._error_response(rpc.id, INVALID_PARAMS, "No text content in message")
+
+        task = Task(
+            id=task_id,
+            sessionId=session_id,
+            status=TaskStatus(state=TaskState.submitted),
+            history=[Message(role="user", parts=[TextPart(text=task_text)])],
+        )
+        self.tasks[task_id] = task
+
+        # Run agent in background thread
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(self._executor, self._run_task, task_id, task_text)
+
+        # Return current task state (submitted, will transition to working→completed)
+        return self._success_response(rpc.id, task.model_dump())
+
+    async def _handle_tasks_get(self, rpc: JSONRPCRequest) -> JSONResponse:
+        params = rpc.params or {}
+        task_id = params.get("id")
+        if not task_id or task_id not in self.tasks:
+            return self._error_response(rpc.id, TASK_NOT_FOUND, "Task not found")
+        return self._success_response(rpc.id, self.tasks[task_id].model_dump())
+
+    async def _handle_tasks_cancel(self, rpc: JSONRPCRequest) -> JSONResponse:
+        params = rpc.params or {}
+        task_id = params.get("id")
+        if not task_id or task_id not in self.tasks:
+            return self._error_response(rpc.id, TASK_NOT_FOUND, "Task not found")
+
+        task = self.tasks[task_id]
+        if task.status.state in (TaskState.completed, TaskState.failed, TaskState.canceled):
+            return self._error_response(rpc.id, TASK_NOT_CANCELABLE, "Task already finished")
+
+        task.status = TaskStatus(
+            state=TaskState.canceled,
+            message=Message(role="agent", parts=[TextPart(text="Task canceled")]),
+        )
+        return self._success_response(rpc.id, task.model_dump())
+
+    def _run_task(self, task_id: str, task_text: str) -> None:
+        """Execute task synchronously (called from thread pool)."""
+        task = self.tasks[task_id]
+        task.status = TaskStatus(state=TaskState.working)
+
         try:
-            # Extract task information
-            task_description = task.get("description", task.get("task", ""))
-            task_context = task.get("context", {})
-            
-            self.logger.info(f"Starting task {task_id}: {task_description[:100]}...")
-            
-            # Send heartbeat to indicate we're busy
-            self.gateway_client.send_heartbeat(status="busy")
-            
-            # Create and run agent for this task
             agent = DefaultAgent(
                 self.model,
                 self.env,
                 config_class=self.agent_config_class,
                 **self.agent_kwargs,
             )
-            
-            result = agent.run(task=task_description, **task_context)
-            
-            # Add trajectory data to result
-            result["trajectory"] = agent.serialize()
-            result["task_id"] = task_id
-            
-            self.logger.info(f"Task {task_id} completed with status: {result.get('exit_status', 'unknown')}")
-            
-            # Submit result to gateway
-            self.gateway_client.submit_result(task_id, result)
-            
-        except Exception as e:
-            self.logger.error(f"Error executing task {task_id}: {e}", exc_info=True)
-            
-            # Report error to gateway
-            try:
-                error_result = {
-                    "exit_status": "error",
-                    "submission": "",
-                    "error": str(e),
-                    "task_id": task_id,
-                }
-                self.gateway_client.submit_result(task_id, error_result)
-            except Exception as submit_error:
-                self.logger.error(f"Failed to submit error result: {submit_error}")
-                
-        finally:
-            self.current_task_id = None
+            result = agent.run(task=task_text)
 
-    def run_single_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        """Execute a single task and return the result (without gateway loop).
-        
-        Useful for testing or one-off task execution.
-        
-        Args:
-            task: Task data containing description and context
-            
-        Returns:
-            Result dictionary with exit_status, submission, and trajectory
-        """
-        agent = DefaultAgent(
-            self.model,
-            self.env,
-            config_class=self.agent_config_class,
-            **self.agent_kwargs,
+            submission = result.get("submission", "")
+            exit_status = result.get("exit_status", "completed")
+            output_text = f"Exit: {exit_status}\n{submission}" if submission else f"Exit: {exit_status}"
+
+            task.status = TaskStatus(
+                state=TaskState.completed,
+                message=Message(role="agent", parts=[TextPart(text=output_text)]),
+            )
+            task.artifacts = [
+                Artifact(
+                    name="result",
+                    parts=[TextPart(text=output_text)],
+                ),
+            ]
+            # Store full trajectory as metadata
+            task.metadata = {"trajectory": agent.serialize(), "exit_status": exit_status}
+
+        except Exception as e:
+            logger.exception(f"Task {task_id} failed")
+            task.status = TaskStatus(
+                state=TaskState.failed,
+                message=Message(role="agent", parts=[TextPart(text=str(e))]),
+            )
+
+    def _success_response(self, rpc_id: str | int | None, result: Any) -> JSONResponse:
+        return JSONResponse(JSONRPCResponse(id=rpc_id, result=result).model_dump())
+
+    def _error_response(self, rpc_id: str | int | None, code: int, message: str) -> JSONResponse:
+        return JSONResponse(
+            JSONRPCResponse(id=rpc_id, error=JSONRPCError(code=code, message=message)).model_dump()
         )
-        
-        task_description = task.get("description", task.get("task", ""))
-        task_context = task.get("context", {})
-        
-        result = agent.run(task=task_description, **task_context)
-        result["trajectory"] = agent.serialize()
-        
-        return result

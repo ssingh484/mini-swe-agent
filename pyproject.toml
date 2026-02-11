@@ -45,6 +45,8 @@ dependencies = [
     "textual",
     "prompt_toolkit",
     "datasets",
+    "starlette",
+    "uvicorn",
 ]
 
 [project.optional-dependencies]
