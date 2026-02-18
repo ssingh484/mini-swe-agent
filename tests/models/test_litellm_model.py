@@ -60,6 +60,7 @@ class TestLitellmModel:
         result = model.query([{"role": "user", "content": "list files"}])
         assert result["extra"]["actions"] == [{"command": "ls -la", "tool_call_id": "call_abc"}]
 
+    @patch.dict("os.environ", {"MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "1"})
     @patch("minisweagent.models.litellm_model.OpenAI")
     @patch("minisweagent.models.litellm_model.LITELLM_AVAILABLE", True)
     @patch("minisweagent.models.litellm_model.litellm")
@@ -87,3 +88,27 @@ class TestLitellmModel:
         model = LitellmModel(model_name="gpt-4")
         result = model.format_observation_messages({"extra": {}}, [])
         assert result == []
+
+    @patch.dict("os.environ", {"MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "3"})
+    @patch("minisweagent.models.litellm_model.OpenAI")
+    @patch("minisweagent.models.litellm_model.LITELLM_AVAILABLE", True)
+    @patch("minisweagent.models.litellm_model.litellm")
+    def test_format_error_triggers_retry(self, mock_litellm, mock_openai_class):
+        tool_call = MagicMock()
+        tool_call.function.name = "bash"
+        tool_call.function.arguments = '{"command": "echo success"}'
+        tool_call.id = "call_success"
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = [
+            _mock_openai_response(None),
+            _mock_openai_response([tool_call]),
+        ]
+        mock_openai_class.return_value = mock_client
+        mock_litellm.cost_calculator.completion_cost.return_value = 0.001
+
+        model = LitellmModel(model_name="gpt-4")
+        result = model.query([{"role": "user", "content": "test"}])
+
+        assert mock_client.chat.completions.create.call_count == 2
+        assert result["extra"]["actions"] == [{"command": "echo success", "tool_call_id": "call_success"}]
