@@ -73,6 +73,35 @@ class TestLitellmModel:
         with pytest.raises(FormatError):
             model.query([{"role": "user", "content": "test"}])
 
+    @patch("minisweagent.models.litellm_model.OpenAI")
+    @patch("minisweagent.models.litellm_model.LITELLM_AVAILABLE", True)
+    @patch("minisweagent.models.litellm_model.litellm")
+    def test_format_error_includes_assistant_message(self, mock_litellm, mock_openai_class):
+        """When LLM responds without tool calls, FormatError should include the assistant message
+        so the LLM has context for the error feedback on retry."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].message.model_dump.return_value = {
+            "role": "assistant",
+            "content": "Let me think about this...",
+        }
+        mock_response.model_dump.return_value = {}
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai_class.return_value = mock_client
+        mock_litellm.cost_calculator.completion_cost.return_value = 0.001
+
+        model = LitellmModel(model_name="gpt-4")
+        with pytest.raises(FormatError) as exc_info:
+            model.query([{"role": "user", "content": "test"}])
+        assert len(exc_info.value.messages) == 2
+        assert exc_info.value.messages[0]["role"] == "assistant"
+        assert exc_info.value.messages[0]["content"] == "Let me think about this..."
+        assert exc_info.value.messages[1]["role"] == "user"
+        assert "No tool calls found" in exc_info.value.messages[1]["content"]
+
     def test_format_observation_messages(self):
         model = LitellmModel(model_name="gpt-4", observation_template="{{ output.output }}")
         message = {"extra": {"actions": [{"command": "echo test", "tool_call_id": "call_1"}]}}

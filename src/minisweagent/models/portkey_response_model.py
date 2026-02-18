@@ -15,6 +15,7 @@ try:
     LITELLM_AVAILABLE = True
 except ImportError:
     LITELLM_AVAILABLE = False
+from minisweagent.exceptions import FormatError
 from minisweagent.models.utils.actions_toolcall_response import (
     BASH_TOOL_RESPONSE_API,
     format_toolcall_observation_messages,
@@ -104,8 +105,12 @@ class PortkeyResponseAPIModel:
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
         message = response.model_dump() if hasattr(response, "model_dump") else dict(response)
+        try:
+            actions = self._parse_actions(response)
+        except FormatError as e:
+            raise FormatError(message, *e.messages) from e
         message["extra"] = {
-            "actions": self._parse_actions(response),
+            "actions": actions,
             **cost_output,
             "timestamp": time.time(),
         }

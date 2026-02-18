@@ -423,3 +423,59 @@ def test_empty_actions_handling(model_factory):
     assert info["exit_status"] == "Submitted"
     assert info["submission"] == "done\n"
     assert agent.n_calls == 2
+
+
+def test_format_error_preserves_assistant_message():
+    """When FormatError includes the assistant message, the agent should add both
+    the assistant message and the error feedback to the message history, giving
+    the LLM context on retry instead of accumulating orphaned error messages."""
+    from minisweagent.exceptions import FormatError
+
+    class FormatErrorModel:
+        """Model that raises FormatError with assistant message on first call, then succeeds."""
+
+        def __init__(self):
+            self.call_count = 0
+
+        def query(self, messages, **kwargs):
+            self.call_count += 1
+            if self.call_count == 1:
+                raise FormatError(
+                    {"role": "assistant", "content": "Let me think about this..."},
+                    {"role": "user", "content": "No tool calls found.", "extra": {"interrupt_type": "FormatError"}},
+                )
+            return {
+                "role": "assistant",
+                "content": None,
+                "extra": {
+                    "actions": [{"command": "echo 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT'\necho 'done'"}],
+                    "cost": 0.0,
+                },
+            }
+
+        def format_message(self, **kwargs):
+            return kwargs
+
+        def format_observation_messages(self, message, outputs, template_vars=None):
+            return [{"role": "user", "content": outputs[0]["output"], "extra": {"returncode": 0}}]
+
+        def get_template_vars(self, **kwargs):
+            return {}
+
+        def serialize(self):
+            return {}
+
+    config_path = Path("src/minisweagent/config/mini.yaml")
+    with open(config_path) as f:
+        config = yaml.safe_load(f)["agent"]
+
+    agent = DefaultAgent(model=FormatErrorModel(), env=LocalEnvironment(), **config)
+    info = agent.run("Test format error")
+    assert info["exit_status"] == "Submitted"
+    # After the first call (FormatError), messages should include:
+    # [system, user, assistant("Let me think..."), user("No tool calls found."), assistant(tool call), observation, exit]
+    assistant_msgs = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert len(assistant_msgs) == 2
+    assert assistant_msgs[0]["content"] == "Let me think about this..."
+    error_msgs = [m for m in agent.messages if "No tool calls found" in (m.get("content") or "")]
+    assert len(error_msgs) == 1
