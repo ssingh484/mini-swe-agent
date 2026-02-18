@@ -71,9 +71,11 @@ class LitellmModel:
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
         
         # Initialize OpenAI client pointing to litellm proxy
+        # Disable SDK-level retries; retries are handled by the tenacity wrapper in query()
         self.client = OpenAI(
             base_url=self.config.proxy_base_url,
             api_key=self.config.api_key,
+            max_retries=0,
         )
 
     def _query(self, messages: list[dict[str, str]], **kwargs):
