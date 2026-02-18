@@ -2,6 +2,7 @@ import logging
 import time
 from collections.abc import Callable
 
+from minisweagent.exceptions import FormatError
 from minisweagent.models import GLOBAL_MODEL_STATS
 from minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
 from minisweagent.models.utils.actions_toolcall_response import (
@@ -72,8 +73,12 @@ class LitellmResponseModel(LitellmModel):
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
         message = response.model_dump() if hasattr(response, "model_dump") else dict(response)
+        try:
+            actions = self._parse_actions(response)
+        except FormatError as e:
+            raise FormatError(message, *e.messages) from e
         message["extra"] = {
-            "actions": self._parse_actions(response),
+            "actions": actions,
             **cost_output,
             "timestamp": time.time(),
         }

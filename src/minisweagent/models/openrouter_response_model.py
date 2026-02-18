@@ -4,6 +4,7 @@ import time
 
 import requests
 
+from minisweagent.exceptions import FormatError
 from minisweagent.models import GLOBAL_MODEL_STATS
 from minisweagent.models.openrouter_model import (
     OpenRouterAPIError,
@@ -87,8 +88,12 @@ class OpenRouterResponseModel(OpenRouterModel):
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
         message = dict(response)
+        try:
+            actions = self._parse_actions(response)
+        except FormatError as e:
+            raise FormatError(message, *e.messages) from e
         message["extra"] = {
-            "actions": self._parse_actions(response),
+            "actions": actions,
             **cost_output,
             "timestamp": time.time(),
         }
