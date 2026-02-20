@@ -37,7 +37,7 @@ from minisweagent.a2a.types import (
     TaskStatus,
     TextPart,
 )
-from minisweagent.agents.default import AgentConfig, DefaultAgent
+from minisweagent.agents.a2a_agent import A2AAgent, A2AAgentConfig
 
 logger = logging.getLogger("a2a_server")
 
@@ -50,7 +50,7 @@ class A2AServer:
         model: Model,
         env: Environment,
         *,
-        agent_config_class: type = AgentConfig,
+        agent_config_class: type = A2AAgentConfig,
         agent_name: str = "mini-swe-agent",
         agent_description: str = "AI software engineering agent",
         host: str = "0.0.0.0",
@@ -176,7 +176,7 @@ class A2AServer:
         task.status = TaskStatus(state=TaskState.working)
 
         try:
-            agent = DefaultAgent(
+            agent = A2AAgent(
                 self.model,
                 self.env,
                 config_class=self.agent_config_class,

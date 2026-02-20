@@ -8,7 +8,7 @@ import typer
 import yaml
 
 from minisweagent import package_dir
-from minisweagent.agents.default import AgentConfig
+from minisweagent.agents.a2a_agent import A2AAgentConfig
 from minisweagent.environments.local import LocalEnvironment
 from minisweagent.models.litellm_model import LitellmModel
 
@@ -28,7 +28,7 @@ def main(
     port: int = typer.Option(5000, "--port", "-p", help="Port to listen on"),
     agent_name: str = typer.Option("mini-swe-agent", "--agent-name", help="Agent name in Agent Card"),
     config_file: Path = typer.Option(
-        package_dir / "config" / "default.yaml",
+        package_dir / "config" / "mini.yaml",
         "-c",
         "--config",
         help="Agent configuration file",
@@ -77,7 +77,7 @@ def main(
     server = A2AServer(
         model=model,
         env=env,
-        agent_config_class=AgentConfig,
+        agent_config_class=A2AAgentConfig,
         agent_name=agent_name,
         host=host,
         port=port,

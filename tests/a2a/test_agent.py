@@ -45,7 +45,7 @@ def test_invalid_json(client):
     assert resp.json()["error"]["code"] == -32600
 
 
-@patch("minisweagent.a2a.agent.DefaultAgent")
+@patch("minisweagent.a2a.agent.A2AAgent")
 def test_tasks_send(mock_agent_class, client):
     mock_agent = MagicMock()
     mock_agent.run.return_value = {"exit_status": "completed", "submission": "ok"}
@@ -89,7 +89,7 @@ def test_tasks_send_empty_text(client):
     assert resp.json()["error"]["code"] == -32602
 
 
-@patch("minisweagent.a2a.agent.DefaultAgent")
+@patch("minisweagent.a2a.agent.A2AAgent")
 def test_tasks_get(mock_agent_class, client):
     mock_agent = MagicMock()
     mock_agent.run.return_value = {"exit_status": "completed", "submission": "ok"}
@@ -117,7 +117,7 @@ def test_tasks_get_not_found(client):
     assert resp.json()["error"]["code"] == -32001
 
 
-@patch("minisweagent.a2a.agent.DefaultAgent")
+@patch("minisweagent.a2a.agent.A2AAgent")
 def test_tasks_cancel(mock_agent_class, client):
     mock_agent = MagicMock()
     mock_agent.run.return_value = {"exit_status": "completed", "submission": ""}
